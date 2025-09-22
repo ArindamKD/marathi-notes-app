@@ -1,305 +1,742 @@
-const express = require('express');
-const multer = require('multer');
-const fs = require('fs').promises;
-const path = require('path');
-const { Twilio } = require('twilio');
-require('dotenv').config();
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-const upload = multer({ storage: storage });
-
-// Twilio configuration
-const client = new Twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
-// Data storage (in production, use a proper database)
-let notes = [];
-let userProfiles = {};
-
-// Ensure uploads directory exists
-const ensureUploadsDir = async () => {
-  try {
-    await fs.access('uploads');
-  } catch {
-    await fs.mkdir('uploads', { recursive: true });
-  }
-};
-
-// DeepSeek AI API function (free tier)
-const callDeepSeekAPI = async (prompt) => {
-  try {
-    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "deepseek-chat",
-        messages: [
-          {
-            role: "system",
-            content: "You are a helpful assistant for a Marathi-speaking parent of a mentally disabled child. You can translate between Marathi and English, summarize notes, and provide supportive responses."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        max_tokens: 1000
-      })
-    });
-
-    const data = await response.json();
-    return data.choices[0].message.content;
-  } catch (error) {
-    console.error('DeepSeek API Error:', error);
-    return 'माफ करा, AI सेवा सध्या उपलब्ध नाही. (Sorry, AI service is currently unavailable.)';
-  }
-};
-
-// Google TTS function (free tier)
-const generateTTS = async (text, language = 'mr') => {
-  try {
-    const response = await fetch(`https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${language}&client=tw-ob`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>मराठी नोट्स | Marathi Notes</title>
     
-    if (response.ok) {
-      return response.url;
-    }
-    return null;
-  } catch (error) {
-    console.error('TTS Error:', error);
-    return null;
-  }
-};
-
-// Save note function
-const saveNote = async (phoneNumber, content, type = 'text', mediaUrl = null) => {
-  const note = {
-    id: Date.now().toString(),
-    phoneNumber,
-    content,
-    type, // 'text', 'voice', 'image', 'video'
-    mediaUrl,
-    timestamp: new Date().toISOString(),
-    dateFormatted: new Date().toLocaleString('mr-IN', {
-      timeZone: 'Asia/Kolkata',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  };
-  
-  notes.push(note);
-  
-  // In production, save to database
-  try {
-    await fs.writeFile('notes.json', JSON.stringify(notes, null, 2));
-  } catch (error) {
-    console.error('Error saving notes:', error);
-  }
-  
-  return note;
-};
-
-// Load notes on startup
-const loadNotes = async () => {
-  try {
-    const data = await fs.readFile('notes.json', 'utf8');
-    notes = JSON.parse(data);
-  } catch (error) {
-    console.log('No existing notes file, starting fresh');
-    notes = [];
-  }
-};
-
-// Get user's recent notes
-const getUserNotes = (phoneNumber, limit = 5) => {
-  return notes
-    .filter(note => note.phoneNumber === phoneNumber)
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-    .slice(0, limit);
-};
-
-// Main WhatsApp webhook
-app.post('/webhook', upload.single('media'), async (req, res) => {
-  const { From, Body, MediaUrl0, MediaContentType0 } = req.body;
-  const phoneNumber = From.replace('whatsapp:', '');
-  
-  try {
-    let responseMessage = '';
+    <!-- PWA Meta Tags -->
+    <link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIk1hcmF0aGkgTm90ZXMgQXBwIiwKICAic2hvcnRfbmFtZSI6ICJOb3RlcyIsCiAgInN0YXJ0X3VybCI6ICIvIiwKICAiZGlzcGxheSI6ICJzdGFuZGFsb25lIiwKICAiYmFja2dyb3VuZF9jb2xvciI6ICIjZmZmZmZmIiwKICAidGhlbWVfY29sb3IiOiAiIzQyODVmNCIsCiAgImljb25zIjogWwogICAgewogICAgICAic3JjIjogImRhdGE6aW1hZ2Uvc3ZnK3htbDtiYXNlNjQsUEhOMlp5QjRiV3h1Y3owaWFIUjBjRG92TDNkM2R5NTNNeTV2Y21jdk1qQXdNQzl6ZG1jaUlIWnBaWGRDYjNnOUlqQWdNQ0F4TWpnZ01USTRJU0lnWm1sc2JEMGlJelF5T0RWbU5DSStQR05wY21Oc1pTQmplRDBpTmpRaUlHTjVQU0kyTkNJZ2NqMGlORFFpSUdacGJHdzlJaU16Wm1abUlpOCtQSFJsZUhRZ2VEMGlOalFpSUhrOUlqUXlJaUJtYVd4c1BTSWlJelptWm1ZaUlHWnZiblF0YzJsNlpUMGlNVFlpSUhSbGVIUXRZVzVqYUc5eVBTSnRhV1JrYkdVaVBrNCtQQzlsZUdRKyIsCiAgICAgICJzaXplcyI6ICIxMjh4MTI4IiwKICAgICAgInR5cGUiOiAiaW1hZ2Uvc3ZnK3htbCIKICAgIH0KICBdCn0=">
+    <meta name="theme-color" content="#4285f4">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     
-    // Handle different types of messages
-    if (MediaUrl0) {
-      // Handle media (voice, image, video)
-      let mediaType = 'media';
-      if (MediaContentType0.startsWith('audio')) mediaType = 'voice';
-      else if (MediaContentType0.startsWith('image')) mediaType = 'image';
-      else if (MediaContentType0.startsWith('video')) mediaType = 'video';
-      
-      const note = await saveNote(phoneNumber, Body || 'Media file', mediaType, MediaUrl0);
-      responseMessage = `📝 आपली ${mediaType === 'voice' ? 'आवाजाची टिप्पणी' : 'फाइल'} सेव्ह झाली!\n⏰ वेळ: ${note.dateFormatted}`;
-      
-    } else if (Body) {
-      const message = Body.trim().toLowerCase();
-      
-      // Handle commands
-      if (message === '/help' || message === 'help' || message === 'मदत') {
-        responseMessage = `🤖 *Note-Taking Bot मदत*\n\n` +
-          `📝 *नोट्स सेव्ह करा:*\n` +
-          `• कोणताही मजकूर टाइप करा\n` +
-          `• आवाजाची टिप्पणी पाठवा\n` +
-          `• फोटो किंवा व्हिडिओ पाठवा\n\n` +
-          `📋 *Commands:*\n` +
-          `• /recent - अलीकडील 5 नोट्स पहा\n` +
-          `• /summary - आजच्या नोट्सचा सारांश\n` +
-          `• /translate - इंग्रजीत अनुवाद\n` +
-          `• /help - ही मदत\n\n` +
-          `💡 फक्त मजकूर लिहा आणि तो automatic सेव्ह होईल!`;
-          
-      } else if (message === '/recent' || message === 'recent' || message === 'अलीकडील') {
-        const recentNotes = getUserNotes(phoneNumber, 5);
-        if (recentNotes.length === 0) {
-          responseMessage = `📝 अजून कोणत्याही नोट्स नाहीत. काही लिहून पहा!`;
-        } else {
-          responseMessage = `📋 *अलीकडील नोट्स:*\n\n`;
-          recentNotes.forEach((note, index) => {
-            responseMessage += `${index + 1}. *${note.dateFormatted}*\n`;
-            if (note.type === 'text') {
-              responseMessage += `${note.content.substring(0, 100)}${note.content.length > 100 ? '...' : ''}\n\n`;
-            } else {
-              responseMessage += `📎 ${note.type} file\n\n`;
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 10px;
+        }
+
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4285f4, #34a853);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .date-display {
+            font-size: 16px;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            padding: 20px;
+        }
+
+        .add-note-section {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .add-note-title {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+            font-weight: bold;
+        }
+
+        .note-buttons {
+            display: flex;
+            justify-content: space-around;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .note-btn {
+            background: linear-gradient(135deg, #4285f4, #34a853);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            padding: 12px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: transform 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 80px;
+            justify-content: center;
+        }
+
+        .note-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .note-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .voice-controls {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            background: #fff3cd;
+            border-radius: 15px;
+            border: 2px solid #ffeaa7;
+        }
+
+        .voice-controls.active {
+            display: block;
+        }
+
+        .voice-text-display {
+            background: white;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            padding: 15px;
+            min-height: 100px;
+            margin: 15px 0;
+            font-size: 16px;
+            line-height: 1.6;
+        }
+
+        .voice-text-marathi {
+            color: #2d3436;
+            margin-bottom: 10px;
+        }
+
+        .voice-text-english {
+            color: #636e72;
+            font-style: italic;
+            font-size: 14px;
+        }
+
+        .voice-btn-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .voice-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .voice-btn.record {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .voice-btn.stop {
+            background: #95a5a6;
+            color: white;
+        }
+
+        .voice-btn.save {
+            background: #27ae60;
+            color: white;
+        }
+
+        .voice-btn.cancel {
+            background: #f39c12;
+            color: white;
+        }
+
+        .notes-section {
+            margin-top: 30px;
+        }
+
+        .section-title {
+            font-size: 20px;
+            color: #333;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .notes-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .note-item {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 15px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .note-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .note-date {
+            font-size: 12px;
+            color: #666;
+            background: #f1f3f4;
+            padding: 4px 8px;
+            border-radius: 10px;
+        }
+
+        .note-type {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 10px;
+            color: white;
+        }
+
+        .note-type.text {
+            background: #4285f4;
+        }
+
+        .note-type.voice {
+            background: #34a853;
+        }
+
+        .note-type.image {
+            background: #fbbc04;
+        }
+
+        .note-content {
+            margin-bottom: 10px;
+        }
+
+        .note-text-marathi {
+            color: #333;
+            font-size: 16px;
+            line-height: 1.5;
+            margin-bottom: 8px;
+        }
+
+        .note-text-english {
+            color: #666;
+            font-size: 14px;
+            font-style: italic;
+            background: #f8f9fa;
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .note-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .action-btn {
+            background: none;
+            border: 1px solid #ddd;
+            border-radius: 15px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            color: #666;
+            transition: all 0.2s;
+        }
+
+        .action-btn:hover {
+            background: #f1f3f4;
+        }
+
+        .text-input {
+            width: 100%;
+            min-height: 100px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            padding: 15px;
+            font-size: 16px;
+            margin: 15px 0;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        .text-input:focus {
+            outline: none;
+            border-color: #4285f4;
+        }
+
+        .save-text-btn {
+            background: #27ae60;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 10px 5px;
+        }
+
+        .cancel-text-btn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 10px 5px;
+        }
+
+        .text-input-section {
+            display: none;
+        }
+
+        .text-input-section.active {
+            display: block;
+        }
+
+        .no-notes {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            padding: 40px 20px;
+        }
+
+        .language-toggle {
+            display: flex;
+            background: rgba(255,255,255,0.2);
+            border-radius: 20px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .lang-btn {
+            flex: 1;
+            background: none;
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .lang-btn.active {
+            background: rgba(255,255,255,0.3);
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                margin: 0;
+                border-radius: 0;
+                min-height: 100vh;
             }
-          });
         }
-        
-      } else if (message === '/summary' || message === 'summary' || message === 'सारांश') {
-        const todayNotes = notes.filter(note => 
-          note.phoneNumber === phoneNumber && 
-          new Date(note.timestamp).toDateString() === new Date().toDateString()
-        );
-        
-        if (todayNotes.length === 0) {
-          responseMessage = `📝 आज कोणत्याही नोट्स नाहीत.`;
-        } else {
-          const notesText = todayNotes.map(note => note.content).join('\n');
-          const summary = await callDeepSeekAPI(`कृपया या मराठी नोट्सचा एक छोटा सारांश द्या:\n${notesText}`);
-          responseMessage = `📊 *आजचा सारांश:*\n\n${summary}`;
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📝 मराठी नोट्स</h1>
+            <div class="date-display" id="todayDate"></div>
+            <div class="language-toggle">
+                <button class="lang-btn active" onclick="setLanguage('mr')">मराठी</button>
+                <button class="lang-btn" onclick="setLanguage('en')">English</button>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <!-- Add Note Section -->
+            <div class="add-note-section">
+                <div class="add-note-title">आजची नोट जोडा | Add Today's Note</div>
+                <div class="note-buttons">
+                    <button class="note-btn" onclick="addTextNote()">
+                        📝 मजकूर<br>Text
+                    </button>
+                    <button class="note-btn" onclick="startVoiceNote()">
+                        🎤 आवाज<br>Voice
+                    </button>
+                    <button class="note-btn" onclick="addImageNote()">
+                        📷 फोटो<br>Photo
+                    </button>
+                </div>
+
+                <!-- Text Input Section -->
+                <div class="text-input-section" id="textInputSection">
+                    <textarea class="text-input" id="textInput" placeholder="तुमची नोट इथे लिहा... | Write your note here..."></textarea>
+                    <div>
+                        <button class="save-text-btn" onclick="saveTextNote()">✅ सेव्ह करा | Save</button>
+                        <button class="cancel-text-btn" onclick="cancelTextNote()">❌ रद्द करा | Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Voice Controls -->
+                <div class="voice-controls" id="voiceControls">
+                    <div class="voice-text-display" id="voiceDisplay">
+                        <div class="voice-text-marathi" id="voiceTextMarathi">बोला... | Speak...</div>
+                        <div class="voice-text-english" id="voiceTextEnglish">Translation will appear here...</div>
+                    </div>
+                    <div class="voice-btn-group">
+                        <button class="voice-btn record" id="recordBtn" onclick="toggleRecording()">🎤 रेकॉर्ड</button>
+                        <button class="voice-btn stop" id="stopBtn" onclick="stopRecording()" disabled>⏹️ थांबा</button>
+                        <button class="voice-btn save" onclick="saveVoiceNote()">✅ सेव्ह करा</button>
+                        <button class="voice-btn cancel" onclick="cancelVoiceNote()">❌ रद्द करा</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Notes List Section -->
+            <div class="notes-section">
+                <div class="section-title">
+                    📋 माझ्या नोट्स | My Notes
+                </div>
+                <div class="notes-list" id="notesList">
+                    <!-- Notes will be loaded here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let currentLanguage = 'mr';
+        let recognition;
+        let isRecording = false;
+        let currentVoiceText = '';
+        let notes = JSON.parse(localStorage.getItem('marathiNotes') || '[]');
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            updateTodayDate();
+            loadNotes();
+            initializeSpeechRecognition();
+            
+            // Register service worker for PWA
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('data:text/javascript;base64,c2VsZi5hZGRFdmVudExpc3RlbmVyKCdpbnN0YWxsJywgZnVuY3Rpb24oZXZlbnQpIHt9KTs=');
+            }
+        });
+
+        // Update today's date
+        function updateTodayDate() {
+            const today = new Date();
+            const marathiDate = today.toLocaleDateString('mr-IN', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+            const englishDate = today.toLocaleDateString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+            document.getElementById('todayDate').innerHTML = `${marathiDate}<br><small>${englishDate}</small>`;
         }
-        
-      } else if (message === '/translate' || message === 'translate' || message === 'भाषांतर') {
-        const recentNote = getUserNotes(phoneNumber, 1)[0];
-        if (!recentNote) {
-          responseMessage = `📝 भाषांतरासाठी कोणत्याही नोट्स नाहीत.`;
-        } else {
-          const translation = await callDeepSeekAPI(`Translate this Marathi text to English: ${recentNote.content}`);
-          responseMessage = `🌐 *English Translation:*\n\n${translation}`;
+
+        // Language toggle
+        function setLanguage(lang) {
+            currentLanguage = lang;
+            document.querySelectorAll('.lang-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            if (recognition) {
+                recognition.lang = lang === 'mr' ? 'mr-IN' : 'en-US';
+            }
         }
-        
-      } else {
-        // Save as regular note
-        const note = await saveNote(phoneNumber, Body, 'text');
-        responseMessage = `✅ नोट सेव्ह झाली!\n⏰ वेळ: ${note.dateFormatted}\n\n💡 /help टाइप करा अधिक options साठी`;
-      }
-    }
-    
-    // Send response via Twilio
-    await client.messages.create({
-      body: responseMessage,
-      from: process.env.TWILIO_WHATSAPP_NUMBER,
-      to: From
-    });
-    
-    res.status(200).send('OK');
-    
-  } catch (error) {
-    console.error('Webhook error:', error);
-    res.status(500).send('Error processing message');
-  }
-});
 
-// Web dashboard for teachers/caregivers
-app.get('/dashboard/:phoneNumber', async (req, res) => {
-  const { phoneNumber } = req.params;
-  const userNotes = notes.filter(note => note.phoneNumber === phoneNumber);
-  
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Notes Dashboard</title>
-      <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .note { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
-        .timestamp { color: #666; font-size: 0.9em; }
-        .content { margin: 10px 0; }
-        .media { margin: 10px 0; }
-        button { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin: 5px; }
-      </style>
-    </head>
-    <body>
-      <h1>Notes for ${phoneNumber}</h1>
-      <div id="notes">
-        ${userNotes.map(note => `
-          <div class="note">
-            <div class="timestamp">${note.dateFormatted}</div>
-            <div class="content">${note.content}</div>
-            ${note.mediaUrl ? `<div class="media">📎 ${note.type} file</div>` : ''}
-            <button onclick="translate('${note.id}')">Translate to English</button>
-          </div>
-        `).join('')}
-      </div>
-      
-      <script>
-        async function translate(noteId) {
-          // Implementation for translation
-          alert('Translation feature - integrate with backend');
+        // Initialize Speech Recognition
+        function initializeSpeechRecognition() {
+            if ('webkitSpeechRecognition' in window) {
+                recognition = new webkitSpeechRecognition();
+            } else if ('SpeechRecognition' in window) {
+                recognition = new SpeechRecognition();
+            } else {
+                console.log('Speech recognition not supported');
+                return;
+            }
+
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'mr-IN';
+
+            recognition.onstart = function() {
+                isRecording = true;
+                document.getElementById('recordBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                document.getElementById('voiceTextMarathi').textContent = '🎤 ऐकत आहे... | Listening...';
+            };
+
+            recognition.onresult = function(event) {
+                let finalTranscript = '';
+                let interimTranscript = '';
+
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = event.results[i][0].transcript;
+                    if (event.results[i].isFinal) {
+                        finalTranscript += transcript;
+                    } else {
+                        interimTranscript += transcript;
+                    }
+                }
+
+                currentVoiceText = finalTranscript + interimTranscript;
+                document.getElementById('voiceTextMarathi').textContent = currentVoiceText || 'बोला... | Speak...';
+                
+                // Translate to other language
+                if (currentVoiceText.trim()) {
+                    translateText(currentVoiceText);
+                }
+            };
+
+            recognition.onerror = function(event) {
+                console.error('Speech recognition error:', event.error);
+                document.getElementById('voiceTextMarathi').textContent = 'त्रुटी झाली. पुन्हा प्रयत्न करा. | Error occurred. Please try again.';
+                stopRecording();
+            };
+
+            recognition.onend = function() {
+                isRecording = false;
+                document.getElementById('recordBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+            };
         }
-      </script>
-    </body>
-    </html>
-  `;
-  
-  res.send(html);
-});
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
+        // Translate text using Google Translate (simple approach)
+        async function translateText(text) {
+            try {
+                // For demo purposes, we'll use a simple rule-based translation
+                // In production, you'd use Google Translate API or similar
+                let translation = '';
+                if (currentLanguage === 'mr') {
+                    translation = `English: ${text}`; // Simplified - would be actual translation
+                } else {
+                    translation = `मराठी: ${text}`; // Simplified - would be actual translation
+                }
+                document.getElementById('voiceTextEnglish').textContent = translation;
+            } catch (error) {
+                console.error('Translation error:', error);
+                document.getElementById('voiceTextEnglish').textContent = 'Translation unavailable';
+            }
+        }
 
-// Initialize and start server
-const init = async () => {
-  await ensureUploadsDir();
-  await loadNotes();
-  
-  app.listen(PORT, () => {
-    console.log(`🚀 WhatsApp Notes Bot running on port ${PORT}`);
-    console.log(`📱 Webhook URL: https://your-domain.com/webhook`);
-    console.log(`📊 Dashboard: https://your-domain.com/dashboard/PHONE_NUMBER`);
-  });
-};
+        // Text-to-Speech
+        function speakText(text, lang = 'mr-IN') {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = lang;
+                utterance.rate = 0.8;
+                speechSynthesis.speak(utterance);
+            }
+        }
 
-init().catch(console.error);
+        // Add text note
+        function addTextNote() {
+            document.getElementById('textInputSection').classList.add('active');
+            document.getElementById('textInput').focus();
+        }
 
-module.exports = app;
+        function saveTextNote() {
+            const text = document.getElementById('textInput').value.trim();
+            if (text) {
+                const note = createNote('text', text);
+                notes.unshift(note);
+                saveNotes();
+                loadNotes();
+                cancelTextNote();
+            }
+        }
+
+        function cancelTextNote() {
+            document.getElementById('textInputSection').classList.remove('active');
+            document.getElementById('textInput').value = '';
+        }
+
+        // Voice note functions
+        function startVoiceNote() {
+            document.getElementById('voiceControls').classList.add('active');
+            document.getElementById('voiceTextMarathi').textContent = 'बोला... | Speak...';
+            document.getElementById('voiceTextEnglish').textContent = 'Translation will appear here...';
+            currentVoiceText = '';
+        }
+
+        function toggleRecording() {
+            if (recognition && !isRecording) {
+                recognition.start();
+            }
+        }
+
+        function stopRecording() {
+            if (recognition && isRecording) {
+                recognition.stop();
+            }
+        }
+
+        function saveVoiceNote() {
+            if (currentVoiceText.trim()) {
+                const note = createNote('voice', currentVoiceText);
+                notes.unshift(note);
+                saveNotes();
+                loadNotes();
+                cancelVoiceNote();
+            }
+        }
+
+        function cancelVoiceNote() {
+            document.getElementById('voiceControls').classList.remove('active');
+            stopRecording();
+            currentVoiceText = '';
+        }
+
+        // Add image note
+        function addImageNote() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = function(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const note = createNote('image', 'Photo note', e.target.result);
+                        notes.unshift(note);
+                        saveNotes();
+                        loadNotes();
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+            input.click();
+        }
+
+        // Create note object
+        function createNote(type, content, imageData = null) {
+            const now = new Date();
+            return {
+                id: Date.now(),
+                type: type,
+                content: content,
+                imageData: imageData,
+                timestamp: now.toISOString(),
+                dateFormatted: now.toLocaleDateString('mr-IN', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                }),
+                englishDate: now.toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                })
+            };
+        }
+
+        // Save notes to localStorage
+        function saveNotes() {
+            localStorage.setItem('marathiNotes', JSON.stringify(notes));
+        }
+
+        // Load and display notes
+        function loadNotes() {
+            const notesList = document.getElementById('notesList');
+            
+            if (notes.length === 0) {
+                notesList.innerHTML = '<div class="no-notes">अजून कोणत्याही नोट्स नाहीत<br>No notes yet</div>';
+                return;
+            }
+
+            notesList.innerHTML = notes.map(note => `
+                <div class="note-item">
+                    <div class="note-header">
+                        <div class="note-date">${note.dateFormatted}</div>
+                        <div class="note-type ${note.type}">${getTypeLabel(note.type)}</div>
+                    </div>
+                    <div class="note-content">
+                        ${note.type === 'image' ? 
+                            `<img src="${note.imageData}" style="max-width: 100%; border-radius: 8px; margin-bottom: 10px;">` : 
+                            ''
+                        }
+                        <div class="note-text-marathi">${note.content}</div>
+                        <div class="note-text-english">English: ${note.content}</div>
+                    </div>
+                    <div class="note-actions">
+                        <button class="action-btn" onclick="speakText('${note.content}', 'mr-IN')">🔊 ऐका</button>
+                        <button class="action-btn" onclick="speakText('${note.content}', 'en-US')">🔊 Listen</button>
+                        <button class="action-btn" onclick="deleteNote(${note.id})">🗑️ हटवा</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Get type label
+        function getTypeLabel(type) {
+            const labels = {
+                'text': 'मजकूर',
+                'voice': 'आवाज',
+                'image': 'फोटो'
+            };
+            return labels[type] || type;
+        }
+
+        // Delete note
+        function deleteNote(id) {
+            if (confirm('ही नोट हटवायची आहे का? | Do you want to delete this note?')) {
+                notes = notes.filter(note => note.id !== id);
+                saveNotes();
+                loadNotes();
+            }
+        }
+
+        // Make app installable
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            deferredPrompt = e;
+            // Show install button
+            const installBtn = document.createElement('button');
+            installBtn.textContent = 'App इन्स्टॉल करा | Install App';
+            installBtn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; background: #4285f4; color: white; border: none; padding: 10px 15px; border-radius: 25px; cursor: pointer; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.3);';
+            installBtn.onclick = () => {
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then((choiceResult) => {
+                    if (choiceResult.outcome === 'accepted') {
+                        installBtn.remove();
+                    }
+                    deferredPrompt = null;
+                });
+            };
+            document.body.appendChild(installBtn);
+        });
+    </script>
+</body>
+</html>
