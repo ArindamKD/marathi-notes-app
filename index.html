@@ -73,14 +73,14 @@
         }
 
         .note-buttons {
-            display: flex;
-            justify-content: space-around;
-            gap: 10px;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
         }
 
         .note-btn {
-            background: #ebebeb;
+            background: #f0eded;
             color: black;
             border: none;
             border-radius: 12px;
@@ -98,9 +98,8 @@
         }
 
         .note-btn:hover {
-            background: #171717;
+            background: #1c1c1c;
             color: white;
-
             transform: translateY(-1px);
         }
 
@@ -370,8 +369,12 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>Ms. Nisha Lokhande</h1>
+            <h1>📝 मराठी नोट्स</h1>
             <div class="date-display" id="todayDate"></div>
+            <div class="language-toggle">
+                <button class="lang-btn active" onclick="setLanguage('mr')">मराठी</button>
+                <button class="lang-btn" onclick="setLanguage('en')">English</button>
+            </div>
         </div>
 
         <div class="main-content">
@@ -417,8 +420,8 @@
             <!-- Notes List Section -->
             <div class="notes-section">
                 <div class="section-title">
-                    माझ्या नोट्स | My Notes
-                </div
+                    📋 माझ्या नोट्स | My Notes
+                </div>
                 <div class="notes-list" id="notesList">
                     <!-- Notes will be loaded here -->
                 </div>
