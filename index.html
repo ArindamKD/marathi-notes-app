@@ -1,821 +1,305 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Abha Lokhande - Daily Notes</title>
+const express = require('express');
+const multer = require('multer');
+const fs = require('fs').promises;
+const path = require('path');
+const { Twilio } = require('twilio');
+require('dotenv').config();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+const upload = multer({ storage: storage });
+
+// Twilio configuration
+const client = new Twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+// Data storage (in production, use a proper database)
+let notes = [];
+let userProfiles = {};
+
+// Ensure uploads directory exists
+const ensureUploadsDir = async () => {
+  try {
+    await fs.access('uploads');
+  } catch {
+    await fs.mkdir('uploads', { recursive: true });
+  }
+};
+
+// DeepSeek AI API function (free tier)
+const callDeepSeekAPI = async (prompt) => {
+  try {
+    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages: [
+          {
+            role: "system",
+            content: "You are a helpful assistant for a Marathi-speaking parent of a mentally disabled child. You can translate between Marathi and English, summarize notes, and provide supportive responses."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 1000
+      })
+    });
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+  } catch (error) {
+    console.error('DeepSeek API Error:', error);
+    return 'माफ करा, AI सेवा सध्या उपलब्ध नाही. (Sorry, AI service is currently unavailable.)';
+  }
+};
+
+// Google TTS function (free tier)
+const generateTTS = async (text, language = 'mr') => {
+  try {
+    const response = await fetch(`https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${language}&client=tw-ob`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
     
-    <!-- PWA Meta Tags -->
-    <link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIkFiaGEgTG9raGFuZGUgLSBEYWlseSBOb3RlcyIsCiAgInNob3J0X25hbWUiOiAiTm90ZXMiLAogICJzdGFydF91cmwiOiAiLyIsCiAgImRpc3BsYXkiOiAic3RhbmRhbG9uZSIsCiAgImJhY2tncm91bmRfY29sb3IiOiAiI2Y4ZjlmYSIsCiAgInRoZW1lX2NvbG9yIjogIiM0OTRmNTkiLAogICJpY29ucyI6IFsKICAgIHsKICAgICAgInNyYyI6ICJkYXRhOmltYWdlL3N2Zyt4bWw7YmFzZTY0LFBITjJaeUI0Yld4dWN6MGlhSFIwY0RvdkwzZDNkeTUzTXk1dmNtY3ZNakF3TUM5emRtY2lJSFpwWlhkQ2IzZzlJakFnTUNBNU1qQWdPVEl3SWlCMGFXeDBiRDBpUW1GemFXTmJTaUJNYjJkcElpQjRiV3h1Y3owaWFIUjBjRG92TDNkM2R5NTNNeTV2Y21jdk1qQXdNQzl6ZG1jaVBnbzhaRzltYzNRZ1NEMGlRbUZ6YVdOYmMwVVVaVUpyYVdOYkoyQjJjV2x0Ym14dFozQnhjMUI1V205c2VHbGJlRzF6WlVsc01uVkNWM1pwV1hOeFYyMXhJZ29nSUNCU2VIbFNhWFoxT21GMlluWjFOM1Z6Y1M1a05VVnhSVXQzY1hwbWEwb3phMjh1V1RKS2EybXFMV2MxWVUxNVlWWnhTSFpWZFNCSGVXdGJWa2RGSWdvaUlFOFJQQ0I2WVhOQ2FHbHZaWGwzWXpJNWNTNW9haWhaUzFFNFNWQndVVkJMVW1SRVNVUXpZVUV4V1VGa1pHUmhlWGhJY1dGTFRGQnNUa1pITWxkVFFRUmlRa2RhV0VwMVRtOVRTM0JyVDBkQlNXTWlJRU5FUFNJdUlpOCtDand2Ym05M2N6NGlJRlpTUFNJeklqNDhaM0J2ZEdObGVpQWdVRGk0TmpnZ01qSTFMekJzSWNnSUlDOHViUVVCTkd0SUlRRVNGU0l3SUE9PSIsCiAgICAgICJzaXplcyI6ICI5MjB4OTIwIiwKICAgICAgInR5cGUiOiAiaW1hZ2Uvc3ZnK3htbCIKICAgIH0KICBdCn0=">
-    <meta name="theme-color" content="#494f59">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    if (response.ok) {
+      return response.url;
+    }
+    return null;
+  } catch (error) {
+    console.error('TTS Error:', error);
+    return null;
+  }
+};
+
+// Save note function
+const saveNote = async (phoneNumber, content, type = 'text', mediaUrl = null) => {
+  const note = {
+    id: Date.now().toString(),
+    phoneNumber,
+    content,
+    type, // 'text', 'voice', 'image', 'video'
+    mediaUrl,
+    timestamp: new Date().toISOString(),
+    dateFormatted: new Date().toLocaleString('mr-IN', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  };
+  
+  notes.push(note);
+  
+  // In production, save to database
+  try {
+    await fs.writeFile('notes.json', JSON.stringify(notes, null, 2));
+  } catch (error) {
+    console.error('Error saving notes:', error);
+  }
+  
+  return note;
+};
+
+// Load notes on startup
+const loadNotes = async () => {
+  try {
+    const data = await fs.readFile('notes.json', 'utf8');
+    notes = JSON.parse(data);
+  } catch (error) {
+    console.log('No existing notes file, starting fresh');
+    notes = [];
+  }
+};
+
+// Get user's recent notes
+const getUserNotes = (phoneNumber, limit = 5) => {
+  return notes
+    .filter(note => note.phoneNumber === phoneNumber)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, limit);
+};
+
+// Main WhatsApp webhook
+app.post('/webhook', upload.single('media'), async (req, res) => {
+  const { From, Body, MediaUrl0, MediaContentType0 } = req.body;
+  const phoneNumber = From.replace('whatsapp:', '');
+  
+  try {
+    let responseMessage = '';
     
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f8f9fa;
-            color: #212529;
-            line-height: 1.6;
-            padding-bottom: 80px;
-        }
-
-        .container {
-            max-width: 420px;
-            margin: 0 auto;
-            background: white;
-            min-height: 100vh;
-            box-shadow: 0 0 20px rgba(0,0,0,0.05);
-        }
-
-        .header {
-            background: white;
-            border-bottom: 1px solid #e9ecef;
-            padding: 20px;
-            text-align: center;
-        }
-
-        .header h1 {
-            font-size: 24px;
-            font-weight: 600;
-            color: #212529;
-            margin-bottom: 8px;
-        }
-
-        .date-picker-container {
-            margin-top: 15px;
-        }
-
-        .date-picker {
-            background: #f8f9fa;
-            border: 2px solid #dee2e6;
-            border-radius: 12px;
-            padding: 12px 16px;
-            font-size: 16px;
-            color: #495057;
-            width: 100%;
-            max-width: 250px;
-            text-align: center;
-            cursor: pointer;
-            transition: border-color 0.2s;
-        }
-
-        .date-picker:focus {
-            outline: none;
-            border-color: #007bff;
-            box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
-        }
-
-        .main-content {
-            padding: 20px;
-        }
-
-        .page {
-            display: none;
-        }
-
-        .page.active {
-            display: block;
-        }
-
-        /* Today's Notes Page */
-        .add-note-section {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 16px;
-            padding: 24px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-
-        .add-note-title {
-            font-size: 20px;
-            font-weight: 600;
-            color: #212529;
-            margin-bottom: 20px;
-        }
-
-        .note-buttons {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-
-        .note-btn {
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 12px;
-            padding: 16px 12px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 6px;
-            min-height: 80px;
-            justify-content: center;
-        }
-
-        .note-btn:hover {
-            background: #0056b3;
-            transform: translateY(-1px);
-        }
-
-        .note-btn:active {
-            transform: translateY(0);
-        }
-
-        .note-btn:disabled {
-            background: #6c757d;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .btn-icon {
-            font-size: 24px;
-        }
-
-        .btn-text {
-            font-size: 12px;
-            font-weight: 500;
-        }
-
-        /* Voice Controls */
-        .voice-controls {
-            display: none;
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 16px;
-            padding: 20px;
-            margin-top: 20px;
-        }
-
-        .voice-controls.active {
-            display: block;
-        }
-
-        .voice-status {
-            text-align: center;
-            font-size: 16px;
-            font-weight: 500;
-            color: #856404;
-            margin-bottom: 15px;
-        }
-
-        .voice-text-display {
-            background: white;
-            border: 2px solid #dee2e6;
-            border-radius: 12px;
-            padding: 16px;
-            min-height: 120px;
-            margin-bottom: 20px;
-            font-size: 16px;
-            color: #495057;
-            line-height: 1.5;
-        }
-
-        .voice-text-placeholder {
-            color: #adb5bd;
-            font-style: italic;
-        }
-
-        .voice-btn-group {
-            display: flex;
-            gap: 8px;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-
-        .voice-btn {
-            padding: 10px 16px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-            min-width: 80px;
-        }
-
-        .voice-btn.record {
-            background: #dc3545;
-            color: white;
-        }
-
-        .voice-btn.record:hover {
-            background: #c82333;
-        }
-
-        .voice-btn.stop {
-            background: #6c757d;
-            color: white;
-        }
-
-        .voice-btn.save {
-            background: #28a745;
-            color: white;
-        }
-
-        .voice-btn.save:hover {
-            background: #218838;
-        }
-
-        .voice-btn.cancel {
-            background: #ffc107;
-            color: #212529;
-        }
-
-        .voice-btn.cancel:hover {
-            background: #e0a800;
-        }
-
-        /* Text Input */
-        .text-input-section {
-            display: none;
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 16px;
-            padding: 20px;
-            margin-top: 20px;
-        }
-
-        .text-input-section.active {
-            display: block;
-        }
-
-        .text-input {
-            width: 100%;
-            min-height: 120px;
-            border: 2px solid #dee2e6;
-            border-radius: 12px;
-            padding: 16px;
-            font-size: 16px;
-            font-family: inherit;
-            resize: vertical;
-            margin-bottom: 16px;
-        }
-
-        .text-input:focus {
-            outline: none;
-            border-color: #007bff;
-            box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
-        }
-
-        .text-btn-group {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-        }
-
-        .text-btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-
-        .text-btn.save {
-            background: #28a745;
-            color: white;
-        }
-
-        .text-btn.cancel {
-            background: #6c757d;
-            color: white;
-        }
-
-        /* Previous Notes Page */
-        .month-selector {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 16px;
-            padding: 20px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-
-        .month-selector select {
-            background: white;
-            border: 2px solid #dee2e6;
-            border-radius: 8px;
-            padding: 10px 16px;
-            font-size: 16px;
-            color: #495057;
-            cursor: pointer;
-        }
-
-        .ai-summarize-section {
-            text-align: center;
-            margin: 30px 0;
-        }
-
-        .ai-summarize-btn {
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            border-radius: 16px;
-            padding: 16px 32px;
-            font-size: 18px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-        }
-
-        .ai-summarize-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
-        }
-
-        .ai-summary {
-            background: #e7f3ff;
-            border: 1px solid #b3d9ff;
-            border-radius: 16px;
-            padding: 20px;
-            margin-top: 20px;
-            display: none;
-        }
-
-        .ai-summary.active {
-            display: block;
-        }
-
-        .ai-summary h3 {
-            color: #0066cc;
-            margin-bottom: 15px;
-            font-size: 18px;
-        }
-
-        .ai-summary p {
-            color: #495057;
-            line-height: 1.6;
-            margin-bottom: 12px;
-        }
-
-        /* Notes List */
-        .notes-list {
-            max-height: 600px;
-            overflow-y: auto;
-        }
-
-        .note-item {
-            background: white;
-            border: 1px solid #e9ecef;
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 12px;
-            transition: all 0.2s;
-        }
-
-        .note-item:hover {
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-
-        .note-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-
-        .note-date {
-            font-size: 12px;
-            color: #6c757d;
-            background: #f8f9fa;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-weight: 500;
-        }
-
-        .note-type {
-            font-size: 11px;
-            padding: 4px 8px;
-            border-radius: 6px;
-            color: white;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-
-        .note-type.text {
-            background: #007bff;
-        }
-
-        .note-type.voice {
-            background: #28a745;
-        }
-
-        .note-type.image {
-            background: #ffc107;
-            color: #212529;
-        }
-
-        .note-content {
-            color: #495057;
-            font-size: 15px;
-            line-height: 1.5;
-            margin-bottom: 12px;
-        }
-
-        .note-image {
-            max-width: 100%;
-            border-radius: 8px;
-            margin-bottom: 10px;
-        }
-
-        .note-actions {
-            display: flex;
-            gap: 8px;
-            justify-content: flex-end;
-        }
-
-        .action-btn {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            padding: 6px 10px;
-            font-size: 12px;
-            cursor: pointer;
-            color: #495057;
-            transition: all 0.2s;
-        }
-
-        .action-btn:hover {
-            background: #e9ecef;
-        }
-
-        /* Bottom Navigation */
-        .bottom-nav {
-            position: fixed;
-            bottom: 0;
-            left: 50%;
-            transform: translateX(-50%);
-            background: white;
-            border-top: 1px solid #e9ecef;
-            border-radius: 20px 20px 0 0;
-            padding: 12px;
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            max-width: 420px;
-            width: 100%;
-            box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
-        }
-
-        .nav-btn {
-            background: none;
-            border: none;
-            padding: 12px 20px;
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 4px;
-            color: #6c757d;
-            font-size: 12px;
-            font-weight: 500;
-        }
-
-        .nav-btn.active {
-            background: #007bff;
-            color: white;
-        }
-
-        .nav-btn:hover {
-            background: #f8f9fa;
-            color: #495057;
-        }
-
-        .nav-btn.active:hover {
-            background: #0056b3;
-            color: white;
-        }
-
-        .nav-icon {
-            font-size: 20px;
-        }
-
-        .no-notes {
-            text-align: center;
-            color: #6c757d;
-            font-style: italic;
-            padding: 60px 20px;
-        }
-
-        /* Loading Animation */
-        .loading {
-            text-align: center;
-            padding: 20px;
-        }
-
-        .loading-spinner {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid #007bff;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-right: 10px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* Responsive Design */
-        @media (max-width: 480px) {
-            .container {
-                margin: 0;
-                border-radius: 0;
-                min-height: 100vh;
-            }
-            
-            .bottom-nav {
-                border-radius: 0;
-                max-width: 100%;
-            }
-        }
-
-        /* Focus and Accessibility */
-        .note-btn:focus,
-        .voice-btn:focus,
-        .text-btn:focus,
-        .nav-btn:focus {
-            outline: 2px solid #007bff;
-            outline-offset: 2px;
-        }
-
-        /* High contrast mode support */
-        @media (prefers-contrast: high) {
-            .container {
-                border: 2px solid #000;
-            }
-            
-            .note-item {
-                border: 2px solid #000;
-            }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Abha Lokhande</h1>
-            <div class="date-picker-container">
-                <input type="date" class="date-picker" id="selectedDate" />
-            </div>
-        </div>
-
-        <div class="main-content">
-            <!-- Today's Notes Page -->
-            <div class="page active" id="todayPage">
-                <div class="add-note-section">
-                    <div class="add-note-title">Add Today's Note</div>
-                    <div class="note-buttons">
-                        <button class="note-btn" onclick="addTextNote()" aria-label="Add text note">
-                            <span class="btn-icon">📝</span>
-                            <span class="btn-text">Text</span>
-                        </button>
-                        <button class="note-btn" onclick="startVoiceNote()" aria-label="Add voice note">
-                            <span class="btn-icon">🎤</span>
-                            <span class="btn-text">Voice</span>
-                        </button>
-                        <button class="note-btn" onclick="addImageNote()" aria-label="Add photo note">
-                            <span class="btn-icon">📷</span>
-                            <span class="btn-text">Photo</span>
-                        </button>
-                    </div>
-
-                    <!-- Text Input Section -->
-                    <div class="text-input-section" id="textInputSection">
-                        <textarea class="text-input" id="textInput" placeholder="Write your note here..."></textarea>
-                        <div class="text-btn-group">
-                            <button class="text-btn save" onclick="saveTextNote()">Save</button>
-                            <button class="text-btn cancel" onclick="cancelTextNote()">Cancel</button>
-                        </div>
-                    </div>
-
-                    <!-- Voice Controls -->
-                    <div class="voice-controls" id="voiceControls">
-                        <div class="voice-status" id="voiceStatus">Ready to record</div>
-                        <div class="voice-text-display" id="voiceDisplay">
-                            <span class="voice-text-placeholder">Your speech will appear here...</span>
-                        </div>
-                        <div class="voice-btn-group">
-                            <button class="voice-btn record" id="recordBtn" onclick="toggleRecording()">🎤 Record</button>
-                            <button class="voice-btn stop" id="stopBtn" onclick="stopRecording()" disabled>⏹️ Stop</button>
-                            <button class="voice-btn save" onclick="saveVoiceNote()">💾 Save</button>
-                            <button class="voice-btn cancel" onclick="cancelVoiceNote()">❌ Cancel</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Today's Notes List -->
-                <div class="notes-list" id="todayNotesList">
-                    <!-- Today's notes will be loaded here -->
-                </div>
-            </div>
-
-            <!-- Previous Notes Page -->
-            <div class="page" id="previousPage">
-                <div class="month-selector">
-                    <label for="monthSelect" style="display: block; margin-bottom: 10px; font-weight: 600; color: #495057;">Select Month:</label>
-                    <select id="monthSelect" onchange="loadMonthNotes()">
-                        <option value="2024-09">September 2024</option>
-                        <option value="2024-08">August 2024</option>
-                        <option value="2024-07">July 2024</option>
-                        <option value="2024-06">June 2024</option>
-                        <option value="2024-05">May 2024</option>
-                    </select>
-                </div>
-
-                <div class="ai-summarize-section">
-                    <button class="ai-summarize-btn" onclick="generateAISummary()">
-                        🤖 AI Monthly Summary
-                    </button>
-                    <div class="ai-summary" id="aiSummary">
-                        <h3>Monthly Summary</h3>
-                        <div id="summaryContent"></div>
-                    </div>
-                </div>
-
-                <div class="notes-list" id="previousNotesList">
-                    <!-- Previous notes will be loaded here -->
-                </div>
-            </div>
-        </div>
-
-        <!-- Bottom Navigation -->
-        <div class="bottom-nav">
-            <button class="nav-btn active" onclick="showPage('today')" aria-label="Today's notes">
-                <span class="nav-icon">📝</span>
-                <span>Today</span>
-            </button>
-            <button class="nav-btn" onclick="showPage('previous')" aria-label="Previous notes">
-                <span class="nav-icon">📚</span>
-                <span>History</span>
-            </button>
-        </div>
-    </div>
-
-    <script>
-        // Global variables
-        let recognition;
-        let isRecording = false;
-        let currentVoiceText = '';
-        let notes = [];
-
-        // Sample data for demonstration
-        const sampleNotes = [
-            {
-                id: 1,
-                type: 'text',
-                content: 'आज सकाळी मुलाने स्वतः brush केले. खूप प्रगती दिसत आहे.',
-                timestamp: '2024-09-20T08:30:00.000Z',
-                dateFormatted: '20 सप्टें 2024, 8:30 AM'
-            },
-            {
-                id: 2,
-                type: 'voice',
-                content: 'डॉक्टरांनी नवीन therapy सुरू करण्यास सांगितले. Weekly तीन वेळा जावे लागेल.',
-                timestamp: '2024-09-19T14:15:00.000Z',
-                dateFormatted: '19 सप्टें 2024, 2:15 PM'
-            },
-            {
-                id: 3,
-                type: 'text',
-                content: 'शाळेत teacher म्हणाली की reading मध्ये improvement आहे.',
-                timestamp: '2024-09-18T16:45:00.000Z',
-                dateFormatted: '18 सप्टें 2024, 4:45 PM'
-            },
-            {
-                id: 4,
-                type: 'voice',
-                content: 'आज मित्रांबरोबर खेळताना खूप happy दिसत होता. Social skills वाढत आहेत.',
-                timestamp: '2024-09-17T11:20:00.000Z',
-                dateFormatted: '17 सप्टें 2024, 11:20 AM'
-            },
-            {
-                id: 5,
-                type: 'text',
-                content: 'Occupational therapist नी hand coordination exercises दिली आहे.',
-                timestamp: '2024-09-16T10:00:00.000Z',
-                dateFormatted: '16 सप्टें 2024, 10:00 AM'
-            },
-            {
-                id: 6,
-                type: 'voice',
-                content: 'आज evening walk ला गेलो. 30 minutes चालला आणि tired नाही झाला.',
-                timestamp: '2024-08-15T18:30:00.000Z',
-                dateFormatted: '15 ऑग 2024, 6:30 PM'
-            },
-            {
-                id: 7,
-                type: 'text',
-                content: 'नवीन medication सुरू केली. Side effects बघावे लागतील.',
-                timestamp: '2024-08-14T09:15:00.000Z',
-                dateFormatted: '14 ऑग 2024, 9:15 AM'
-            },
-            {
-                id: 8,
-                type: 'voice',
-                content: 'Speech therapy session चांगला गेला. नवे words बोलण्याचा प्रयत्न करत आहे.',
-                timestamp: '2024-08-13T15:45:00.000Z',
-                dateFormatted: '13 ऑग 2024, 3:45 PM'
-            },
-            {
-                id: 9,
-                type: 'text',
-                content: 'आज emotional meltdown झाला shopping mall मध्ये. Sensory overload झाला असावा.',
-                timestamp: '2024-08-12T17:00:00.000Z',
-                dateFormatted: '12 ऑग 2024, 5:00 PM'
-            },
-            {
-                id: 10,
-                type: 'voice',
-                content: 'व्यायाम routine start केली आहे. Physical strength वाढवायची आहे.',
-                timestamp: '2024-08-11T07:00:00.000Z',
-                dateFormatted: '11 ऑग 2024, 7:00 AM'
-            }
-        ];
-
-        // Initialize app
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeApp();
-        });
-
-        function initializeApp() {
-            // Set today's date
-            const today = new Date();
-            document.getElementById('selectedDate').value = today.toISOString().split('T')[0];
-            
-            // Load sample notes
-            notes = [...sampleNotes];
-            saveNotes();
-            loadTodayNotes();
-            initializeSpeechRecognition();
-        }
-
-        // Initialize Speech Recognition
-        function initializeSpeechRecognition() {
-            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-                recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-                recognition.continuous = true;
-                recognition.interimResults = true;
-                recognition.lang = 'hi-IN'; // Default to Hindi, but will detect other languages
-
-                recognition.onstart = function() {
-                    isRecording = true;
-                    document.getElementById('recordBtn').disabled = true;
-                    document.getElementById('stopBtn').disabled = false;
-                    document.getElementById('voiceStatus').textContent = '🎤 Recording... Speak now';
-                    document.getElementById('voiceDisplay').innerHTML = '<span class="voice-text-placeholder">Listening...</span>';
-                };
-
-                recognition.onresult = function(event) {
-                    let finalTranscript = '';
-                    let interimTranscript = '';
-
-                    for (let i = event.resultIndex; i < event.results.length; i++) {
-                        const transcript = event.results[i][0].transcript;
-                        if (event.results[i].isFinal) {
-                            finalTranscript += transcript;
-                        } else {
-                            interimTranscript += transcript;
-                        }
-                    }
-
-                    currentVoiceText = finalTranscript + interimTranscript;
-                    document.getElementById('voiceDisplay').textContent = currentVoiceText || 'Your speech will appear here...';
-                };
-
-                recognition.onerror = function(event) {
-                    console.error('Speech recognition error:', event.error);
-                    document.getElementById('voiceStatus').textContent = '❌ Error occurred. Please try again.';
-                    stopRecording();
-                };
-
-                recognition.onend = function() {
-                    isRecording = false;
-                    document.getElementById('recordBtn').disabled = false;
-                    document.getElementById('stopBtn').disabled = true;
-                    document.getElementById('voiceStatus').textContent = 'Recording completed';
-                };
+    // Handle different types of messages
+    if (MediaUrl0) {
+      // Handle media (voice, image, video)
+      let mediaType = 'media';
+      if (MediaContentType0.startsWith('audio')) mediaType = 'voice';
+      else if (MediaContentType0.startsWith('image')) mediaType = 'image';
+      else if (MediaContentType0.startsWith('video')) mediaType = 'video';
+      
+      const note = await saveNote(phoneNumber, Body || 'Media file', mediaType, MediaUrl0);
+      responseMessage = `📝 आपली ${mediaType === 'voice' ? 'आवाजाची टिप्पणी' : 'फाइल'} सेव्ह झाली!\n⏰ वेळ: ${note.dateFormatted}`;
+      
+    } else if (Body) {
+      const message = Body.trim().toLowerCase();
+      
+      // Handle commands
+      if (message === '/help' || message === 'help' || message === 'मदत') {
+        responseMessage = `🤖 *Note-Taking Bot मदत*\n\n` +
+          `📝 *नोट्स सेव्ह करा:*\n` +
+          `• कोणताही मजकूर टाइप करा\n` +
+          `• आवाजाची टिप्पणी पाठवा\n` +
+          `• फोटो किंवा व्हिडिओ पाठवा\n\n` +
+          `📋 *Commands:*\n` +
+          `• /recent - अलीकडील 5 नोट्स पहा\n` +
+          `• /summary - आजच्या नोट्सचा सारांश\n` +
+          `• /translate - इंग्रजीत अनुवाद\n` +
+          `• /help - ही मदत\n\n` +
+          `💡 फक्त मजकूर लिहा आणि तो automatic सेव्ह होईल!`;
+          
+      } else if (message === '/recent' || message === 'recent' || message === 'अलीकडील') {
+        const recentNotes = getUserNotes(phoneNumber, 5);
+        if (recentNotes.length === 0) {
+          responseMessage = `📝 अजून कोणत्याही नोट्स नाहीत. काही लिहून पहा!`;
+        } else {
+          responseMessage = `📋 *अलीकडील नोट्स:*\n\n`;
+          recentNotes.forEach((note, index) => {
+            responseMessage += `${index + 1}. *${note.dateFormatted}*\n`;
+            if (note.type === 'text') {
+              responseMessage += `${note.content.substring(0, 100)}${note.content.length > 100 ? '...' : ''}\n\n`;
             } else {
-                console.
+              responseMessage += `📎 ${note.type} file\n\n`;
+            }
+          });
+        }
+        
+      } else if (message === '/summary' || message === 'summary' || message === 'सारांश') {
+        const todayNotes = notes.filter(note => 
+          note.phoneNumber === phoneNumber && 
+          new Date(note.timestamp).toDateString() === new Date().toDateString()
+        );
+        
+        if (todayNotes.length === 0) {
+          responseMessage = `📝 आज कोणत्याही नोट्स नाहीत.`;
+        } else {
+          const notesText = todayNotes.map(note => note.content).join('\n');
+          const summary = await callDeepSeekAPI(`कृपया या मराठी नोट्सचा एक छोटा सारांश द्या:\n${notesText}`);
+          responseMessage = `📊 *आजचा सारांश:*\n\n${summary}`;
+        }
+        
+      } else if (message === '/translate' || message === 'translate' || message === 'भाषांतर') {
+        const recentNote = getUserNotes(phoneNumber, 1)[0];
+        if (!recentNote) {
+          responseMessage = `📝 भाषांतरासाठी कोणत्याही नोट्स नाहीत.`;
+        } else {
+          const translation = await callDeepSeekAPI(`Translate this Marathi text to English: ${recentNote.content}`);
+          responseMessage = `🌐 *English Translation:*\n\n${translation}`;
+        }
+        
+      } else {
+        // Save as regular note
+        const note = await saveNote(phoneNumber, Body, 'text');
+        responseMessage = `✅ नोट सेव्ह झाली!\n⏰ वेळ: ${note.dateFormatted}\n\n💡 /help टाइप करा अधिक options साठी`;
+      }
+    }
+    
+    // Send response via Twilio
+    await client.messages.create({
+      body: responseMessage,
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: From
+    });
+    
+    res.status(200).send('OK');
+    
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(500).send('Error processing message');
+  }
+});
+
+// Web dashboard for teachers/caregivers
+app.get('/dashboard/:phoneNumber', async (req, res) => {
+  const { phoneNumber } = req.params;
+  const userNotes = notes.filter(note => note.phoneNumber === phoneNumber);
+  
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Notes Dashboard</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .note { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .timestamp { color: #666; font-size: 0.9em; }
+        .content { margin: 10px 0; }
+        .media { margin: 10px 0; }
+        button { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin: 5px; }
+      </style>
+    </head>
+    <body>
+      <h1>Notes for ${phoneNumber}</h1>
+      <div id="notes">
+        ${userNotes.map(note => `
+          <div class="note">
+            <div class="timestamp">${note.dateFormatted}</div>
+            <div class="content">${note.content}</div>
+            ${note.mediaUrl ? `<div class="media">📎 ${note.type} file</div>` : ''}
+            <button onclick="translate('${note.id}')">Translate to English</button>
+          </div>
+        `).join('')}
+      </div>
+      
+      <script>
+        async function translate(noteId) {
+          // Implementation for translation
+          alert('Translation feature - integrate with backend');
+        }
+      </script>
+    </body>
+    </html>
+  `;
+  
+  res.send(html);
+});
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Initialize and start server
+const init = async () => {
+  await ensureUploadsDir();
+  await loadNotes();
+  
+  app.listen(PORT, () => {
+    console.log(`🚀 WhatsApp Notes Bot running on port ${PORT}`);
+    console.log(`📱 Webhook URL: https://your-domain.com/webhook`);
+    console.log(`📊 Dashboard: https://your-domain.com/dashboard/PHONE_NUMBER`);
+  });
+};
+
+init().catch(console.error);
+
+module.exports = app;
