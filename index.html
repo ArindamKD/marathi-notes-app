@@ -856,6 +856,347 @@
             
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            // Remove typing indicator and add real message after delay
+            setTimeout(() => {
+                chatContainer.removeChild(typingDiv);
+                
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message bot';
+                messageDiv.innerHTML = `
+                    <div class="message-bubble">
+                        ${message}
+                    </div>
+                    <div class="message-time">${time}</div>
+                `;
+                
+                chatContainer.appendChild(messageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }, 1500);
+        }
+
+        function sendTextNote() {
+            const textInput = document.getElementById('textInput');
+            const text = textInput.value.trim();
+            
+            if (text) {
+                addUserMessage(text);
+                saveNote('text', text);
+                textInput.value = '';
+                textInput.style.height = 'auto';
+                
+                // Bot responses
+                const responses = [
+                    "धन्यवाद! हे महत्त्वाचे आहे. मी हे नोंदवले आहे.<br><br>Thank you! This is important. I've noted this down.",
+                    "छान! आणखी काही सांगायचे आहे का?<br><br>Great! Anything else you'd like to share?",
+                    "समजले. तुमची प्रगती खरोखर चांगली आहे.<br><br>Understood. Your progress is really good.",
+                    "हे नोट सेव्ह केले. तुम्ही खूप चांगले काम करत आहात.<br><br>This note is saved. You're doing great work."
+                ];
+                
+                setTimeout(() => {
+                    const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+                    addBotMessage(randomResponse);
+                }, 800);
+            }
+        }
+
+        function handleEnterKey(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendTextNote();
+            }
+        }
+
+        function autoResize(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = Math.min(textarea.scrollHeight, 100) + 'px';
+        }
+
+        // Voice functions
+        function startVoiceNote() {
+            document.getElementById('voiceRecording').classList.add('active');
+            voiceTranscript = ''; // Reset transcript
+            currentVoiceText = '';
+            document.getElementById('voiceTranscript').textContent = 'Your speech will appear here...';
+            
+            if (recognition && !isRecording) {
+                recognition.start();
+            }
+        }
+
+        function stopRecording() {
+            if (recognition && isRecording) {
+                isRecording = false;
+                recognition.stop();
+                document.getElementById('recordingStatus').textContent = 'Recording stopped';
+            }
+        }
+
+        function saveVoiceNote() {
+            const text = voiceTranscript.trim();
+            if (text) {
+                addUserMessage(text, 'voice');
+                saveNote('voice', text);
+                cancelVoiceNote();
+                
+                // Translate text (simple simulation)
+                setTimeout(() => {
+                    translateAndRespond(text);
+                }, 1000);
+            }
+        }
+
+        function cancelVoiceNote() {
+            document.getElementById('voiceRecording').classList.remove('active');
+            if (recognition && isRecording) {
+                isRecording = false;
+                recognition.stop();
+            }
+            voiceTranscript = '';
+            currentVoiceText = '';
+        }
+
+        function translateAndRespond(text) {
+            // Simple translation simulation
+            let englishText = text;
+            if (text.includes('आज') || text.includes('मुला') || text.includes('खूप')) {
+                englishText = `English translation: ${text}`;
+            }
+            
+            const response = `मी ऐकले! तुमचा आवाज स्पष्ट होता.<br><br>I heard you! Your voice was clear.<br><br><em>${englishText}</em>`;
+            addBotMessage(response);
+        }
+
+        // Image function
+        function addImageNote() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = function(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const imageHtml = `<img src="${e.target.result}" style="max-width: 200px; border-radius: 10px;"><br>📷 Photo shared`;
+                        addUserMessage(imageHtml, 'image');
+                        saveNote('image', 'Photo note', e.target.result);
+                        
+                        setTimeout(() => {
+                            addBotMessage("फोटो मिळाला! खूप छान आहे.<br><br>Got the photo! It's very nice.");
+                        }, 800);
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+            input.click();
+        }
+
+        // Save note function
+        function saveNote(type, content, imageData = null) {
+            const now = new Date();
+            const note = {
+                id: Date.now(),
+                type: type,
+                content: content,
+                imageData: imageData,
+                timestamp: now.toISOString(),
+                date: now.toISOString().split('T')[0],
+                time: now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+                dateFormatted: now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+            };
+            
+            notes.push(note);
+            localStorage.setItem('userNotes', JSON.stringify(notes));
+        }
+
+        // Page navigation
+        function showPage(page) {
+            // Update nav buttons
+            document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            // Show selected page
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            
+            if (page === 'chat') {
+                document.getElementById('chatPage').classList.add('active');
+            } else if (page === 'journey') {
+                document.getElementById('journeyPage').classList.add('active');
+                showCalendar();
+            }
+        }
+
+        // Journey/Calendar functions
+        function loadCalendarView() {
+            const calendarGrid = document.getElementById('calendarGrid');
+            const currentMonthKey = new Date().toISOString().slice(0, 7);
+            
+            let html = '';
+            for (const [key, data] of Object.entries(monthlyData)) {
+                const isCurrentMonth = key === currentMonthKey;
+                html += `
+                    <div class="month-card ${isCurrentMonth ? 'current' : ''}" onclick="showMonthDetail('${key}')">
+                        <div class="month-name">${data.name.split(' ')[0]}</div>
+                        <div class="note-count">${data.noteCount}</div>
+                        <div class="note-label">notes</div>
+                    </div>
+                `;
+            }
+            calendarGrid.innerHTML = html;
+        }
+
+        function showCalendar() {
+            document.getElementById('calendarView').style.display = 'block';
+            document.getElementById('monthDetail').classList.remove('active');
+        }
+
+        function showMonthDetail(monthKey) {
+            currentMonth = monthKey;
+            const monthData = monthlyData[monthKey];
+            
+            document.getElementById('calendarView').style.display = 'none';
+            document.getElementById('monthDetail').classList.add('active');
+            document.getElementById('monthTitle').textContent = monthData.name;
+            
+            loadMonthNotes(monthData.notes);
+        }
+
+        function loadMonthNotes(notes) {
+            const monthNotes = document.getElementById('monthNotes');
+            
+            if (notes.length === 0) {
+                monthNotes.innerHTML = '<div style="padding: 40px; text-align: center; color: #666;">No notes for this month</div>';
+                return;
+            }
+            
+            let html = '';
+            notes.forEach(note => {
+                const typeColor = {
+                    'text': '#E3F2FD',
+                    'voice': '#E8F5E8', 
+                    'image': '#FFF3E0'
+                };
+                
+                html += `
+                    <div class="timeline-note">
+                        <div class="note-date-badge">${note.dateFormatted}</div>
+                        <div class="note-content-area">
+                            <div class="note-type-badge" style="background: ${typeColor[note.type]}">${note.type.toUpperCase()}</div>
+                            <div class="note-text">${note.content}</div>
+                            ${note.english ? `<div style="font-size: 12px; color: #666; font-style: italic; margin-top: 5px;">${note.english}</div>` : ''}
+                            <div style="font-size: 11px; color: #999; margin-top: 8px;">${note.time}</div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            monthNotes.innerHTML = html;
+        }
+
+        function generateAISummary() {
+            const summaryCard = document.getElementById('aiSummaryCard');
+            const summaryContent = document.getElementById('summaryContent');
+            
+            // Show loading
+            summaryContent.innerHTML = '<div style="text-align: center; padding: 20px;"><div class="loading-spinner"></div>Generating summary...</div>';
+            summaryCard.classList.add('active');
+            
+            // Simulate AI processing
+            setTimeout(() => {
+                const monthData = monthlyData[currentMonth];
+                const summaryText = generateMonthlySummary(monthData);
+                summaryContent.innerHTML = summaryText;
+            }, 2000);
+        }
+
+        function generateMonthlySummary(monthData) {
+            // Simple AI-like summary generation
+            const summaries = {
+                '2024-09': {
+                    progress: "तुमच्या मुलामध्ये या महिन्यात चांगली प्रगती दिसली आहे. स्वतंत्रपणे दैनंदिन कामे करण्याचा प्रयत्न करत आहे.",
+                    englishProgress: "Great progress observed in your child this month. Attempting to do daily tasks independently.",
+                    highlights: [
+                        "Self-brushing teeth - major milestone",
+                        "Improved reading skills noted by teacher", 
+                        "Better social interaction with friends"
+                    ],
+                    recommendations: [
+                        "Continue current therapy sessions",
+                        "Focus on hand coordination exercises",
+                        "Maintain consistent daily routine"
+                    ],
+                    nextMonth: "पुढच्या महिन्यात writing skills वर लक्ष द्या आणि नवे therapy sessions सुरू करा."
+                },
+                '2024-08': {
+                    progress: "सामाजिक कौशल्यांमध्ये लक्षणीय सुधारणा. मित्रांबरोबर खेळण्यात आनंद घेत आहे.",
+                    englishProgress: "Significant improvement in social skills. Enjoying playtime with friends.",
+                    highlights: [
+                        "Happy social interactions",
+                        "Started occupational therapy",
+                        "Better emotional regulation"
+                    ],
+                    recommendations: [
+                        "Continue social activities",
+                        "Regular therapy sessions",
+                        "Monitor emotional responses"
+                    ],
+                    nextMonth: "शारीरिक व्यायाम वाढवा आणि sensory activities समाविष्ट करा."
+                }
+            };
+            
+            const summary = summaries[currentMonth] || summaries['2024-09'];
+            
+            return `
+                <div class="summary-section">
+                    <h4>📈 Overall Progress</h4>
+                    <p><strong>मराठी:</strong> ${summary.progress}</p>
+                    <p><strong>English:</strong> ${summary.englishProgress}</p>
+                </div>
+                
+                <div class="summary-section">
+                    <h4>✨ Key Highlights</h4>
+                    ${summary.highlights.map(item => `<p>• ${item}</p>`).join('')}
+                </div>
+                
+                <div class="summary-section">
+                    <h4>🎯 Recommendations</h4>
+                    ${summary.recommendations.map(item => `<p>• ${item}</p>`).join('')}
+                </div>
+                
+                <div class="summary-section">
+                    <h4>🔮 Focus for Next Month</h4>
+                    <p>${summary.nextMonth}</p>
+                </div>
+                
+                <div style="text-align: center; margin-top: 20px; padding: 15px; background: rgba(37, 211, 102, 0.1); border-radius: 10px;">
+                    <p style="color: #075E54; font-weight: 500;">🌟 Keep up the excellent work! Your dedication is making a real difference.</p>
+                </div>
+            `;
+        }
+
+        // Add loading spinner CSS
+        const style = document.createElement('style');
+        style.textContent = `
+            .loading-spinner {
+                display: inline-block;
+                width: 20px;
+                height: 20px;
+                border: 2px solid #f3f3f3;
+                border-top: 2px solid #25D366;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-right: 10px;
+            }
+            
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>
         }
 
         function addBotMessage(message) {
